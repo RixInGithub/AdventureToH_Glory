@@ -10,7 +10,6 @@
 
 io = require("socket.io-client")
 crypto = require("crypto")
-sqlite = require("sqlite")
 hb = 15000
 serv = io("wss://p3.windows96.net", {autoConnect: false})
 nonce = 0
@@ -34,9 +33,10 @@ Adventure to H glory.
 
 Input "a" to go back to menu.
 `.slice(1,-1)
-db = (function(){return[eval("var\x20a"),a][1]})()
+db = require("better-sqlite3")("store.db")
 chrSiz = [7, 13]
-playV = chrSiz.map(function(a){return(2)/a})
+playV=chrSiz.map(function(a){return(4)/a})
+msgs = {}
 
 wrapText=function(a,b){return(a).split("\n").map(function(d,c){return[[c=[],Array(Math.ceil(d.length/b)).fill().map(function(_,e){c.push(d.slice(e*b,e*b+b))})],c.join("\n")][1]}).join("\n")}
 
@@ -83,7 +83,7 @@ serv.on("packet", function(p) {
 				success: true
 			},
 			dest: [p.source, p.data.responsePort].join(":"),
-			nonce: nonce
+			nonce
 		}
 		serv.emit("packet", conns[nonce])
 		nonce++
@@ -109,10 +109,19 @@ serv.on("packet", function(p) {
 		var recall = me.onNewMsg
 		typeof(recall)==="function"&&recall("newMsg", ind)
 	}
+	if (p.data.type === "disconnect") {
+		var[me]=[]
+		void((me=peers[p.data.peerID])&&(me.disconnected=1))
+	}
 })
 
-serv.on("packet.ok", function({nonce}) {
-	var c=conns[nonce]
+serv.on("packet.err", function({nonce:n},p) {
+	var{dest}=msgs[n]
+	void((p=peers[Object.values(conns).find(function(v){return(v).dest===dest}).data.peerID])&&(p.disconnected=1))
+})
+
+serv.on("packet.ok", function({nonce:n}) {
+	var c=conns[n]
 	if(!(c))return
 	if(c.data.message!="Connection accepted")return
 	if(peers[c.data.peerID])return
@@ -122,8 +131,9 @@ serv.on("packet.ok", function({nonce}) {
 		state: connStates.WARN,
 		funnies: {
 			opts: ["Start game", "Credits", "Exit", "Why?"],
-			gameScreen: Array(72).fill().map(function(){return(Array)(21)}), // unique rows/columns needed for gaem screen
-			playX: 0
+			gameScreen: Array(21).fill().map(function(){return"\x20".repeat(72).split("")}), // unique rows/columns needed for gaem screen
+			playX: 0,
+			prevPlayArrX: 0
 		}
 	}
 	var me = peers[c.data.peerID]
@@ -152,11 +162,22 @@ serv.on("packet.ok", function({nonce}) {
 	}
 	function drawGround(playX) {
 		playX = Math.max(playX,6)
-		var[...ground]=["─┬","┬┴","┴┬","┬┴"] // rare opportunity to init var without spaces holey loley!!
-		ground=ground.map(function(a){return(a).repeat(39).slice(playX%6,playX%6+72)}) // i wish i could shorten this
-		ground.forEach(function(a){send(["text",a])})
+		var[...ground]=["┬┴","┴┬","┬┴","─┬"] // rare opportunity to init var without spaces holey loley!!
+		ground=ground.map(function(a){return(a).repeat(4).slice(playX%6).slice(0,2).repeat(36)})
+		ground.forEach(function(a,b){me.funnies.gameScreen[20-b]=a.split("")})
 	}
-	function recall(){setTimeout.apply(0,[].concat.apply([main,,],arguments))}
+	function drawPlay(playX,playY) {
+		var[ind,arrX]=[16-Math.round(playY),Math.min(6,playX)]
+		var[...arr]=me.funnies.gameScreen[ind]
+		arr[me.funnies.prevPlayArrX]="\x20"
+		arr[arrX]="h"
+		me.funnies.gameScreen[ind]=arr
+		me.funnies.prevPlayArrX=arrX
+	}
+	function drawGame() {
+		(me.funnies.oldScreen==me.funnies.gameScreen+"")||[send(["clear"]),me.funnies.oldScreen=me.funnies.gameScreen+"",send(["text",[{color:"#eeedf0",background:"#012456",text:me.funnies.gameScreen.map(function(a){return(a).join("")}).join("\n")}]])]
+	}
+	function recall(){me.disconnected||setTimeout.apply(0,[].concat.apply([main,,],arguments))}
 	async function main(a, b) {
 		send(["resize", [520, 350]])
 		/*
@@ -221,11 +242,12 @@ serv.on("packet.ok", function({nonce}) {
 			}
 		}
 		if (a == "gameLoop") {
-			send(["clear"])
 			var{playX}=me.funnies
 			playX=Math.round(playX)
-			send(["text", "\x20".repeat(Math.min(6,me.funnies.playX))+"h\n"])
-			drawGround(me.funnies.playX)
+			drawGround(playX)
+			drawPlay(playX,0)
+			drawGame()
+			// console.log(me.funnies)
 			me.funnies.playX+=playV[0]
 			setTimeout(recall, 1000/30, "gameLoop")
 		}
@@ -241,8 +263,4 @@ serv.onAny(function(a,b) {
 	console.log.apply(console, arguments)
 })
 
-!async function(){
-	db=await(sqlite).open({filename:"store.db",driver:require("sqlite3").verbose().Database})
-	await db.exec("CREATE TABLE IF NOT EXISTS players (address TEXT PRIMARY KEY, level INTEGER, chkpnt INTEGER)")
-	serv.connect()
-}()
+!function(oEmit){[oEmit=serv.emit,serv.emit=function(a,b,...c){return[a=="packet"&&(msgs[b.nonce]=b),oEmit.apply(serv,[a,b].concat(c))][1]},db.exec("CREATE\x20TABLE\x20IF\x20NOT\x20EXISTS\x20players\x20(address\x20TEXT\x20PRIMARY\x20KEY,\x20level\x20INTEGER,\x20chkpnt\x20INTEGER)"),serv.connect()]}()
