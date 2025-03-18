@@ -10,8 +10,9 @@
 
 io = require("socket.io-client")
 crypto = require("crypto")
+bcrypt = require("bcryptjs")
 hb = 15000
-serv = io("wss://p3.windows96.net", {autoConnect: false})
+serv=io("wss://p3.windows96.net",{autoConnect:false,rejectUnauthorized:!1})
 nonce = 0
 conns = {}
 peers = {}
@@ -26,7 +27,7 @@ I also used complementary documentation from @themirazz on Github.
 
 I'd also thank my friend Bonki (https://bonkiscoolsite.neocities.org,
 @bonkiscoolsite.neocities.org on Bluesky, @live:.cid.e8f44fc690686f40 on
-Skype) for partially play-testing my game.
+Skype) for playtesting my game.
 
 Also, I should thank you, the awesome player, for reading the credits of
 Adventure to H glory.
@@ -35,7 +36,8 @@ Input "a" to go back to menu.
 `.slice(1,-1)
 db = require("better-sqlite3")("store.db")
 chrSiz = [7, 13]
-playV=chrSiz.map(function(a){return(4)/a})
+playV=[8/7,1.45]
+gravity=-4/13
 msgs = {}
 
 wrapText=function(a,b){return(a).split("\n").map(function(d,c){return[[c=[],Array(Math.ceil(d.length/b)).fill().map(function(_,e){c.push(d.slice(e*b,e*b+b))})],c.join("\n")][1]}).join("\n")}
@@ -71,7 +73,8 @@ serv.on("packet", function(p) {
 		return
 	}
 	if (p.data.type === "connect") {
-		var pId = randomSecret(32)
+		var pId = Object.keys(peers)[0]||randomSecret(32)
+		while(Object.keys(peers).includes(pId))pId=randomSecret(32)
 		conns[nonce] = {
 			data: {
 				type: "ack",
@@ -120,6 +123,12 @@ serv.on("packet.err", function({nonce:n},p) {
 	void((p=peers[Object.values(conns).find(function(v){return(v).dest===dest}).data.peerID])&&(p.disconnected=1))
 })
 
+function someUtilIdek(a) {
+	return(Array)(Math.ceil(a/playV[0])).fill().reduce(function(b){return(b)+playV[0]},0) // more accuracy
+}
+
+function equalOnNDecimals(a,b,n){return(Math).floor(a*(n**10))===Math.floor(b*(n**10))}
+
 serv.on("packet.ok", function({nonce:n}) {
 	var c=conns[n]
 	if(!(c))return
@@ -132,11 +141,14 @@ serv.on("packet.ok", function({nonce:n}) {
 		funnies: {
 			opts: ["Start game", "Credits", "Exit", "Why?"],
 			gameScreen: Array(21).fill().map(function(){return"\x20".repeat(72).split("")}), // unique rows/columns needed for gaem screen
-			playX: 0,
-			prevPlayArrX: 0
+			playX: someUtilIdek(6),
+			playY: 0,
+			playYVel: 0,
+			infJump: !1
 		}
 	}
 	var me = peers[c.data.peerID]
+	me.funnies.reachX=me.funnies.playX
 	function send(data) {
 		serv.emit("packet", {
 			data: {
@@ -144,6 +156,20 @@ serv.on("packet.ok", function({nonce:n}) {
 				nonce,
 				peerID: null,
 				type: "message",
+				success: true
+			},
+			dest: c.dest,
+			nonce
+		})
+		nonce++
+	}
+	function disconnect(guiltTrip) {
+		if(guiltTrip)send(["text", "\n\nbut h wants to adventure…"])
+		serv.emit("packet", {
+			data: {
+				nonce,
+				peerID: c.data.peerID,
+				type: "disconnect",
 				success: true
 			},
 			dest: c.dest,
@@ -160,6 +186,9 @@ serv.on("packet.ok", function({nonce:n}) {
 		})
 		send(["text", "\nPress W or S to move up or down (respectively), enter option with D"])
 	}
+	function clearGame() {
+		me.funnies.gameScreen.forEach(function(a,b){me.funnies.gameScreen[b]="\x20".repeat(a.length).split("")})
+	}
 	function drawGround(playX) {
 		playX = Math.max(playX,6)
 		var[...ground]=["┬┴","┴┬","┬┴","─┬"] // rare opportunity to init var without spaces holey loley!!
@@ -167,15 +196,18 @@ serv.on("packet.ok", function({nonce:n}) {
 		ground.forEach(function(a,b){me.funnies.gameScreen[20-b]=a.split("")})
 	}
 	function drawPlay(playX,playY) {
-		var[ind,arrX]=[16-Math.round(playY),Math.min(6,playX)]
+		var ground = true
+		var[...res]=[Math.min(6,playX),16-Math.round(playY)]
+		// console.log(res)
+		var[arrX,ind]=res
+		if(ind<0)[ind=me.funnies.gameScreen.length-1+(ind%me.funnies.gameScreen.length),ground=false]
 		var[...arr]=me.funnies.gameScreen[ind]
-		arr[me.funnies.prevPlayArrX]="\x20"
 		arr[arrX]="h"
 		me.funnies.gameScreen[ind]=arr
-		me.funnies.prevPlayArrX=arrX
+		return(res).concat([ground])
 	}
 	function drawGame() {
-		(me.funnies.oldScreen==me.funnies.gameScreen+"")||[send(["clear"]),me.funnies.oldScreen=me.funnies.gameScreen+"",send(["text",[{color:"#eeedf0",background:"#012456",text:me.funnies.gameScreen.map(function(a){return(a).join("")}).join("\n")}]])]
+		(me.funnies.oldScreen!=me.funnies.gameScreen+"")&&[send(["clear"]),me.funnies.oldScreen=me.funnies.gameScreen+"",send(["text",[{color:"#eeedf0",background:"#012456",text:me.funnies.gameScreen.map(function(a){return(a).join("")}).join("\n")}]])]
 	}
 	function recall(){me.disconnected||setTimeout.apply(0,[].concat.apply([main,,],arguments))}
 	async function main(a, b) {
@@ -196,18 +228,7 @@ serv.on("packet.ok", function({nonce:n}) {
 			switch (me.state) {
 				case connStates.WARN:
 					if (me.msgs[b]+""==="input,exit") {
-						send(["text", "\n\nbut h wants to adventure…"])
-						serv.emit("packet", {
-							data: {
-								nonce,
-								peerID: c.data.peerID,
-								type: "disconnect",
-								success: true
-							},
-							dest: c.dest,
-							nonce
-						})
-						nonce++
+						disconnect(true)
 						break
 					}
 					break
@@ -229,33 +250,57 @@ serv.on("packet.ok", function({nonce:n}) {
 								me.state = connStates.CREDITS
 								send(["text", credits])
 								return
+							case "exit":
+								disconnect(true)
 							default: break
 						}
 					}
 					drawMenu()
+					if(bcrypt.compareSync(m,"$2b$10$Ox4msxvSAWTyaUM/lEL3WOAE7uu5AdHM5CVVwE5LZzk286fxo891u"))[me.funnies.infJump=!(me.funnies.infJump),send(["text","\n\nwtf,r,u,trying,2,do".split(",").join("\x20")])] // noone is gonna guess la secret codeword for this feature
 					break
 				case connStates.CREDITS:
 					var m = (me.msgs[b]+"").toLowerCase()
 					if(m=="input,a")[me.state=connStates.MENU,drawMenu()]
 					break
+				case connStates.GAME:
+					var m = me.msgs[b]
+					if(m[0]!="input")return
+					var[a,jumpd]=[m[1].toLowerCase().split(""),(!!(me.funnies.playYVel))&&(!(me.funnies.infJump))]
+					// if(me.funnies.reachX!=me.funnies.playX)return
+					a.forEach(function(c) {
+						if((/**/c=="w")&&(!(jumpd)))[me.funnies.playYVel+=playV[1],jumpd=!(me.funnies.infJump)]
+						if(/***/c=="a")me.funnies.reachX=Math.max(me.funnies.reachX-someUtilIdek(6),0)
+						// ........ s
+						if(/***/c=="d")me.funnies.reachX+=someUtilIdek(4)
+					})
 				default: break
 			}
 		}
 		if (a == "gameLoop") {
-			var{playX}=me.funnies
-			playX=Math.round(playX)
-			drawGround(playX)
-			drawPlay(playX,0)
+			var{playX,playY,playYVel}=me.funnies
+			var[moved]=[!1]
+			// playX=Math.round(playX)
+			clearGame()
+			var[play]=[drawPlay(Math.round(playX),playY)]
+			if(play[2])drawGround(playX)
 			drawGame()
-			// console.log(me.funnies)
-			me.funnies.playX+=playV[0]
-			setTimeout(recall, 1000/30, "gameLoop")
+			// console.log(playX, me.funnies.reachX, playX==me.funnies.reachX)
+			var[prevX]=[me.funnies.playX]
+			if(equalOnNDecimals(me.funnies.playX,me.funnies.reachX,5))me.funnies.reachX=me.funnies.playX
+			if(me.funnies.reachX<me.funnies.playX)[me.funnies.playX=Math.max(me.funnies.playX-playV[0],0),moved=!0,((me.funnies.playX==0)&&(me.funnies.reachX=0))]
+			if((!(moved))&&(me.funnies.reachX>me.funnies.playX))me.funnies.playX+=playV[0]
+			var[prevY]=[playY]
+			me.funnies.playY=Math.max(me.funnies.playY+me.funnies.playYVel,0)
+			void((me.funnies.playY!=prevY)?(me.funnies.playYVel+=gravity):(me.funnies.playYVel=0))
+			setTimeout(recall,1000/30,"gameLoop")
 		}
 	}
 	console.log("someone interesting at", c.dest.split(":")[0], "connected")
 	peers[c.data.peerID].onNewMsg = recall
 	recall("init")
 })
+
+serv.on("disconnect",serv.connect.bind(serv))
 
 serv.onAny(function(a,b) {
 	if(a=="packet.ok")return

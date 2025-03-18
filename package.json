@@ -5,6 +5,7 @@
 		"start": "node main.js"
 	},
 	"dependencies": {
+		"bcryptjs": "^3.0.2",
 		"better-sqlite3": "^11.8.1",
 		"socket.io-client": "^4.8.1"
 	}
